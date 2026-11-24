@@ -1,7 +1,7 @@
 // notes-panel: a floating, always-on-top markdown editor over the notes
 // folder, in the spirit of the Raycast Notes window.
 //
-//   notes-panel [toggle|show|hide|new|today|open <path>] [--dir <folder>]
+//   notes-panel [toggle|show|hide|new|scratch|today|open <path>] [--dir <folder>]
 //
 // The first invocation becomes a small server on a unix socket and shows
 // the panel; later invocations just forward their command to it and exit.
@@ -29,6 +29,9 @@ let socketPath = supportDir + "/notes-panel.sock"
 let userDefaults = environment["NOTES_PANEL_DEFAULTS_SUITE"].flatMap { UserDefaults(suiteName: $0) }
   ?? .standard
 let debugEnabled = environment["NOTES_PANEL_DEBUG"] == "1"
+/// Seconds a scratch pad may sit unedited before the sweep deletes it.
+/// NOTES_PANEL_SCRATCH_TTL overrides, for tests and live checks.
+let scratchTTL = environment["NOTES_PANEL_SCRATCH_TTL"].flatMap(TimeInterval.init) ?? 3 * 3600
 
 // MARK: - Unix socket plumbing
 
@@ -149,6 +152,33 @@ func listNotes() -> [Note] {
 /// First free path for `filename` in `directory` (`uniqueNotePath`).
 func uniquePath(for filename: String, in directory: String = notesDir) -> String {
   uniqueNotePath(for: filename, in: directory)
+}
+
+/// A scratch pad from ⇧⌘N (`notes-panel scratch`): a hidden
+/// `.scratch-<id>.md` in the notes folder. Dotfiles never reach
+/// listNotes, Browse Notes or the "[[" picker, yet the pad loads, saves
+/// and renders like any note, and "[[" links resolve against the folder
+/// it sits in. Not a generated name, so nothing renames or migrates it.
+func isScratchNote(_ path: String) -> Bool {
+  let name = (path as NSString).lastPathComponent
+  return name.hasPrefix(".scratch-") && name.lowercased().hasSuffix(".md")
+}
+
+/// The pads in `directory` idle for more than `ttl` seconds. A pad's
+/// modification date is its last-used stamp: every save touches it.
+/// Only regular files: a folder with a matching name is left alone.
+func expiredScratchNotes(in directory: String, olderThan ttl: TimeInterval, now: Date = Date()) -> [String] {
+  let names = (try? diskFiles.contentsOfDirectory(atPath: directory)) ?? []
+  return names.compactMap { name in
+    let path = (directory as NSString).appendingPathComponent(name)
+    guard isScratchNote(path),
+      let attributes = try? diskFiles.attributesOfItem(atPath: path),
+      (attributes[.type] as? FileAttributeType) == .typeRegular,
+      let modified = attributes[.modificationDate] as? Date,
+      modified.addingTimeInterval(ttl) < now
+    else { return nil }
+    return path
+  }
 }
 
 // MARK: - Entry point

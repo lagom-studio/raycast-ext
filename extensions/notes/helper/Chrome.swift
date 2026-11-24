@@ -214,9 +214,22 @@ final class PillView: NSView {
 /// unified toolbar is what gives the title bar Raycast's height and keeps
 /// the traffic lights, title and pill on one centred row.
 final class TitlebarChrome: NSObject, NSToolbarDelegate {
+  /// The incognito badge for a scratch pad's title bar: `scratch.png`
+  /// beside the binary (it ships in assets/), drawn as a template so it
+  /// takes the title's grey. Nil when the asset is missing.
+  static func scratchImage() -> NSImage? {
+    let binaryDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    guard let image = NSImage(contentsOf: binaryDir.appendingPathComponent("scratch.png")) else { return nil }
+    image.isTemplate = true
+    return image
+  }
+
   private let run: (String) -> Void
   var onSettings: ((NSView) -> Void)?
   private let titleLabel = PassThroughLabel(labelWithString: "")
+  /// The incognito badge left of the title while a scratch pad is open.
+  private let scratchBadge = NSImageView()
+  private let titleStack = NSStackView()
   private let pill: PillView
   var settingsAnchor: NSView { pill.subviews.first { $0.toolTip == "Settings" }! }
 
@@ -266,6 +279,27 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
     titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     titleLabel.translatesAutoresizingMaskIntoConstraints = false
     titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280).isActive = true
+
+    scratchBadge.image = Self.scratchImage()
+    scratchBadge.contentTintColor = .secondaryLabelColor
+    scratchBadge.toolTip = "Scratch note: deleted three hours after its last edit"
+    scratchBadge.isHidden = true
+    scratchBadge.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      scratchBadge.widthAnchor.constraint(equalToConstant: 16),
+      scratchBadge.heightAnchor.constraint(equalToConstant: 16),
+    ])
+    titleStack.orientation = .horizontal
+    titleStack.alignment = .centerY
+    titleStack.spacing = 5
+    titleStack.translatesAutoresizingMaskIntoConstraints = false
+    titleStack.addArrangedSubview(scratchBadge)
+    titleStack.addArrangedSubview(titleLabel)
+  }
+
+  /// Shows the scratch badge while a pad is open (PanelController.updateTitle).
+  func setScratch(_ on: Bool) {
+    scratchBadge.isHidden = !on || scratchBadge.image == nil
   }
 
   /// Gives `window` the toolbar and hides its own title; the centred label
@@ -308,7 +342,7 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
     let item = NSToolbarItem(itemIdentifier: identifier)
     switch identifier {
     case Self.titleItem:
-      item.view = titleLabel
+      item.view = titleStack
       item.label = "Title"
     case Self.pillItem:
       item.view = pill

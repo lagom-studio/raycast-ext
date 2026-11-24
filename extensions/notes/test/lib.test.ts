@@ -17,6 +17,8 @@ import {
   randomNoteId,
   firstLineTitle,
   getDailyFilename,
+  listMarkdownFiles,
+  listMarkdownFileMetadata,
   parseTitleFromContentOrFilename,
   renameNoteFromTitleIfNeeded,
 } from "../src/lib/notes";
@@ -497,6 +499,22 @@ const cases: Case[] = [
       const log = await readNoteLog(dir);
       assert.equal(log?.retiredIDs?.length, 100);
       assert.equal(Object.keys(log?.renames ?? {}).length, 100);
+    },
+  ],
+  [
+    "hidden files never list as notes (the window's scratch pads stay invisible)",
+    async () => {
+      const dir = freshDir();
+      writeFileSync(path.join(dir, "visible.md"), "# Visible\n");
+      writeFileSync(path.join(dir, ".scratch-ab12.md"), "# Scratch\n");
+      writeFileSync(path.join(dir, ".note-renames.jsonl"), "");
+      for (const list of [listMarkdownFiles, listMarkdownFileMetadata]) {
+        const notes = await list(dir);
+        assert.deepEqual(
+          notes.map((note) => note.filename),
+          ["visible.md"],
+        );
+      }
     },
   ],
   [

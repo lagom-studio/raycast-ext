@@ -436,7 +436,10 @@ export async function listMarkdownFiles(
 
   const entries = await readdir(notesDir, { withFileTypes: true });
   const markdownEntries = entries.filter(
-    (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"),
+    (entry) =>
+      entry.isFile() &&
+      !entry.name.startsWith(".") &&
+      entry.name.toLowerCase().endsWith(".md"),
   );
   const todayFilename = getDailyFilename();
 
@@ -480,7 +483,10 @@ export async function listMarkdownFileMetadata(
 
   const entries = await readdir(notesDir, { withFileTypes: true });
   const markdownEntries = entries.filter(
-    (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"),
+    (entry) =>
+      entry.isFile() &&
+      !entry.name.startsWith(".") &&
+      entry.name.toLowerCase().endsWith(".md"),
   );
   const todayFilename = getDailyFilename();
 
