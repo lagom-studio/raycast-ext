@@ -51,6 +51,7 @@ Inside the window:
 | `:` and two letters, as in `:cla` | emoji picker under the caret, searched by GitHub/Slack shortcode (about 780 common emoji, built in): type to filter, `↑` `↓`, `↩` to insert the emoji in place of `:cla`, `Esc` or a space to keep the text. A closing colon on an exact name (`:clap:`) converts at once (`⌘Z` gives the name back). Only at a line start or after a space or punctuation, so `10:30`, `key:value` and `std::string` stay text, as does anything in code or a link address |
 | `⌘[` / `⌘]` | previous / next note, in last-edit order as of when the window was shown |
 | `⌘N` | new note (its first line, markdown stripped, becomes the title and filename) |
+| `⇧⌘N` | new scratch note: a hidden pad for text transfers and markdown previews, deleted once it sits unedited for three hours |
 | `⌘D` | duplicate note |
 | `⌘↩` | toggle the task on the current line, or click the `[ ]` box |
 | `⌘F` | find in note |

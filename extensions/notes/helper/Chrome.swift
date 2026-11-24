@@ -217,6 +217,9 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
   private let run: (String) -> Void
   var onSettings: ((NSView) -> Void)?
   private let titleLabel = PassThroughLabel(labelWithString: "")
+  /// The incognito badge left of the title while a scratch pad is open.
+  private let scratchBadge = NSImageView()
+  private let titleStack = NSStackView()
   private let pill: PillView
   var settingsAnchor: NSView { pill.subviews.first { $0.toolTip == "Settings" }! }
 
@@ -266,6 +269,27 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
     titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     titleLabel.translatesAutoresizingMaskIntoConstraints = false
     titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280).isActive = true
+
+    scratchBadge.image = scratchBadgeImage()
+    scratchBadge.contentTintColor = .secondaryLabelColor
+    scratchBadge.toolTip = "Scratch note: deleted three hours after its last edit"
+    scratchBadge.isHidden = true
+    scratchBadge.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      scratchBadge.widthAnchor.constraint(equalToConstant: 16),
+      scratchBadge.heightAnchor.constraint(equalToConstant: 16),
+    ])
+    titleStack.orientation = .horizontal
+    titleStack.alignment = .centerY
+    titleStack.spacing = 5
+    titleStack.translatesAutoresizingMaskIntoConstraints = false
+    titleStack.addArrangedSubview(scratchBadge)
+    titleStack.addArrangedSubview(titleLabel)
+  }
+
+  /// Shows the scratch badge while a pad is open (PanelController.updateTitle).
+  func setScratch(_ on: Bool) {
+    scratchBadge.isHidden = !on || scratchBadge.image == nil
   }
 
   /// Gives `window` the toolbar and hides its own title; the centred label
@@ -308,7 +332,7 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
     let item = NSToolbarItem(itemIdentifier: identifier)
     switch identifier {
     case Self.titleItem:
-      item.view = titleLabel
+      item.view = titleStack
       item.label = "Title"
     case Self.pillItem:
       item.view = pill

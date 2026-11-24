@@ -1312,6 +1312,55 @@ do {
   check("the fake daemon exited", daemon.closeOwned())
 }
 
+// MARK: - Scratch notes (⇧⌘N)
+
+do {
+  let scratchDir = tempDir()
+  let previousDir = notesDir
+  notesDir = scratchDir
+  let controller = PanelController(initialCommand: "hide")
+  controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+  controller.handle("scratch")
+  let pads = try! FileManager.default.contentsOfDirectory(atPath: scratchDir).filter { isScratchNote($0) }
+  check("scratch command creates one hidden pad", pads.count == 1)
+  check("a scratch pad never joins the note list", listNotes().isEmpty)
+  check("the pad reads back through debug status",
+    controller.debugStatus().contains("\"scratch\": true"))
+  let panel = Mirror(reflecting: controller).children.first { $0.label == "panel" }!.value as! NSPanel
+  check("an untitled pad is titled Scratch", panel.title == "Scratch")
+  let chrome = Mirror(reflecting: controller).children.first { $0.label == "titlebarChrome" }!.value as! TitlebarChrome
+  let badge = Mirror(reflecting: chrome).children.first { $0.label == "scratchBadge" }!.value as! NSImageView
+  check("the scratch badge shows for a pad", badge.image != nil && !badge.isHidden)
+
+  let old = Date().addingTimeInterval(-scratchTTL - 60)
+  let padPath = (scratchDir as NSString).appendingPathComponent(pads.first!)
+  try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: padPath)
+  controller.sweepScratch()
+  check("the open pad is exempt from the sweep", FileManager.default.fileExists(atPath: padPath))
+
+  let stalePad = (scratchDir as NSString).appendingPathComponent(".scratch-stale.md")
+  try! "# Stale\n".write(toFile: stalePad, atomically: true, encoding: .utf8)
+  try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: stalePad)
+  let oldNote = (scratchDir as NSString).appendingPathComponent("old.md")
+  try! "# Old\n".write(toFile: oldNote, atomically: true, encoding: .utf8)
+  try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: oldNote)
+  controller.sweepScratch()
+  check("the sweep deletes only expired pads",
+    FileManager.default.fileExists(atPath: padPath)
+      && !FileManager.default.fileExists(atPath: stalePad)
+      && FileManager.default.fileExists(atPath: oldNote))
+
+  controller.handle("new")
+  check("moving off the pad keeps it until the next sweep",
+    FileManager.default.fileExists(atPath: padPath)
+      && !controller.debugStatus().contains("\"scratch\": true"))
+  check("the badge hides on an ordinary note", badge.isHidden)
+  controller.sweepScratch()
+  check("the sweep collects the pad once moved off it", !FileManager.default.fileExists(atPath: padPath))
+  controller.handle("hide")
+  notesDir = previousDir
+}
+
 print("\(count - failures)/\(count) passed")
 if failures == 0 { print("all passed") }
 exit(failures == 0 ? 0 : 1)

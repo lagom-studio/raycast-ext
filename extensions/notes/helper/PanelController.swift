@@ -33,6 +33,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
   private var menuBarItem: MenuBarItem?
   private var bridge: FocusBridgeClient!
   private var bridgeTimer: Timer?
+  private var scratchTimer: Timer?
   /// True while the bridge says the daemon cannot share the notch (or it
   /// was lost mid-claim): the editor floats until a probe proves it safe.
   private var bridgeDegraded = false
@@ -52,6 +53,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     installMainMenu()
     buildPanel()
     _ = applyAttachment(settings.attachment, announce: false)
+    sweepScratch()
     NotificationCenter.default.addObserver(
       self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification,
       object: nil)
@@ -319,11 +321,19 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     }
     RunLoop.main.add(bridgeTickTimer, forMode: .common)
     bridgeTimer = bridgeTickTimer
+    // The launch sweep clears pads a previous run left; this one
+    // collects a pad once it has sat unedited for scratchTTL.
+    let sweep = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+      self?.sweepScratch()
+    }
+    RunLoop.main.add(sweep, forMode: .common)
+    scratchTimer = sweep
   }
 
   private static let commandActions: [PaletteAction] = [
     PaletteAction(title: "Open Settings", keys: "⌘,", symbol: "gearshape", command: "settings"),
     PaletteAction(title: "New Note", keys: "⌘N", symbol: "plus", command: "new"),
+    PaletteAction(title: "New Scratch Note", keys: "⇧⌘N", symbol: "timer", command: "scratch"),
     PaletteAction(title: "Open Today's Note", keys: "", symbol: "calendar", command: "today"),
     PaletteAction(title: "Duplicate Note", keys: "⌘D", symbol: "doc.on.doc", command: "duplicate"),
     PaletteAction(title: "Browse Notes", keys: "⌘P", symbol: "square.grid.2x2", command: "browse"),
@@ -363,6 +373,9 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
       hide()
     case "new":
       newNote()
+      show()
+    case "scratch":
+      newScratchNote()
       show()
     case "today":
       openToday()
@@ -695,6 +708,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
       "\"claimed\": \(bridge?.last.claimed == true)",
       "\"focusDisplay\": \"\(bridge?.last.display ?? "")\"",
       "\"session\": \(attached?.session != nil)",
+      "\"scratch\": \(currentPath.map { isScratchNote($0) } ?? false)",
       "\"panelVisible\": \(panel.isVisible && !panel.isMiniaturized)",
     ]
     return "{" + fields.joined(separator: ", ") + "}"
@@ -707,7 +721,11 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
   private func refreshList() {
     migrateNamesIfNeeded()
     notes = listNotes()
-    if let current = currentPath, !notes.contains(where: { $0.path == current }) {
+    // A scratch pad is never in the list; it stays the open note until
+    // its file is actually gone.
+    if let current = currentPath, !notes.contains(where: { $0.path == current }),
+      !(isScratchNote(current) && diskFiles.fileExists(atPath: current))
+    {
       currentPath = nil
       loadedText = ""
     }
@@ -732,7 +750,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     // A path from before the names were migrated (Browse Notes on the
     // first launch) opens the note under its new name.
     let path = existingNote(at: requested) ?? requested
-    if !notes.contains(where: { $0.path == path }) {
+    if !notes.contains(where: { $0.path == path }), !isScratchNote(path) {
       notes.insert(Note(path: path, modified: Date()), at: 0)
     }
     load(path)
@@ -795,6 +813,33 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     loadedText = ""
     refreshList()
     if let first = notes.first { load(first.path) } else { newNote() }
+  }
+
+  /// A fresh pad for text transfers and markdown previews: a hidden
+  /// `.scratch-<id>.md` in the notes folder (see `isScratchNote`). The
+  /// sweep deletes it once it has sat unedited for scratchTTL.
+  private func newScratchNote() {
+    saveNow()
+    let path = uniquePath(for: ".scratch-\(freshID(in: notesDir)).md")
+    do {
+      try diskFiles.createDirectory(atPath: notesDir, withIntermediateDirectories: true)
+      try "# Scratch\n".write(toFile: path, atomically: false, encoding: .utf8)
+    } catch {
+      NSSound.beep()
+      panel.title = "Cannot write to \(notesDir)"
+      return
+    }
+    load(path)
+  }
+
+  /// Deletes every pad idle for longer than scratchTTL, except the open
+  /// one (an open pad is still in use). Permanently: a pad is disposable
+  /// by definition and the Trash should not fill with hidden files.
+  /// Runs at launch and once a minute.
+  func sweepScratch() {
+    for path in expiredScratchNotes(in: notesDir, olderThan: scratchTTL) where path != currentPath {
+      try? diskFiles.removeItem(atPath: path)
+    }
   }
 
   private func newNote() {
@@ -1197,10 +1242,15 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     guard let path = currentPath else {
       panel.title = "Notes"
       attached?.windowTitle = "Notes"
+      titlebarChrome?.setScratch(false)
       return
     }
+    titlebarChrome?.setScratch(isScratchNote(path))
     guard textView.isEditable else { return }
-    let noteTitle = title(of: textView.string, filename: (path as NSString).lastPathComponent)
+    let noteTitle =
+      isScratchNote(path) && Titles.firstLine(of: textView.string) == nil
+      ? "Scratch"
+      : title(of: textView.string, filename: (path as NSString).lastPathComponent)
     let unsaved = textView.string != loadedText ? " •" : ""
     panel.title = noteTitle + unsaved
     attached?.windowTitle = panel.title
