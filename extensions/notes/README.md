@@ -85,7 +85,7 @@ Inside the window:
 | ```` ``` ```` then `↩` or `Space` | open a code block and add its closing fence |
 | `@today`, `@tomorrow` or `@yesterday` then `Space`, `↩`, `⇥` or punctuation | the word becomes the local date, `2026-10-05`, keeping what you typed after it; `⌘Z` right after gives the word back. Only at the start of a word (not in `user@today.com`), never in code or a link address; pasted text is left alone |
 | paste a URL over a selection | turn the selection into `[text](url)` |
-| `⌘Z` / `⇧⌘Z` | undo / redo; each typing rule and formatting key is one step |
+| `⌘Z` / `⇧⌘Z` | undo / redo; each typing rule and formatting key is one step. Every note keeps its own history, so switching notes loses nothing; a trashed note comes back with it (still in the Trash otherwise), and undoing a New/Scratch/Duplicate removes the note it made |
 
 The file stays raw markdown, but the window never shows the markers:
 headings, bold, italic, strike, code, quotes, toggles, callouts, links, list
