@@ -164,24 +164,17 @@ func isScratchNote(_ path: String) -> Bool {
   return name.hasPrefix(".scratch-") && name.lowercased().hasSuffix(".md")
 }
 
-/// The incognito badge for a scratch pad's title bar: `scratch.png`
-/// beside the binary (it ships in assets/), drawn as a template so it
-/// takes the title's grey. Nil when the asset is missing.
-func scratchBadgeImage() -> NSImage? {
-  let binaryDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-  guard let image = NSImage(contentsOf: binaryDir.appendingPathComponent("scratch.png")) else { return nil }
-  image.isTemplate = true
-  return image
-}
-
 /// The pads in `directory` idle for more than `ttl` seconds. A pad's
 /// modification date is its last-used stamp: every save touches it.
+/// Only regular files: a folder with a matching name is left alone.
 func expiredScratchNotes(in directory: String, olderThan ttl: TimeInterval, now: Date = Date()) -> [String] {
   let names = (try? diskFiles.contentsOfDirectory(atPath: directory)) ?? []
   return names.compactMap { name in
     let path = (directory as NSString).appendingPathComponent(name)
     guard isScratchNote(path),
-      let modified = (try? diskFiles.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+      let attributes = try? diskFiles.attributesOfItem(atPath: path),
+      (attributes[.type] as? FileAttributeType) == .typeRegular,
+      let modified = attributes[.modificationDate] as? Date,
       modified.addingTimeInterval(ttl) < now
     else { return nil }
     return path

@@ -1344,11 +1344,16 @@ do {
   let oldNote = (scratchDir as NSString).appendingPathComponent("old.md")
   try! "# Old\n".write(toFile: oldNote, atomically: true, encoding: .utf8)
   try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: oldNote)
+  let scratchDirNamed = (scratchDir as NSString).appendingPathComponent(".scratch-folder.md")
+  try! FileManager.default.createDirectory(atPath: scratchDirNamed, withIntermediateDirectories: true)
+  try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: scratchDirNamed)
   controller.sweepScratch()
   check("the sweep deletes only expired pads",
     FileManager.default.fileExists(atPath: padPath)
       && !FileManager.default.fileExists(atPath: stalePad)
       && FileManager.default.fileExists(atPath: oldNote))
+  check("a folder named like a pad survives the sweep",
+    FileManager.default.fileExists(atPath: scratchDirNamed))
 
   controller.handle("new")
   check("moving off the pad keeps it until the next sweep",

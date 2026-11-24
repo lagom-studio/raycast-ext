@@ -214,6 +214,16 @@ final class PillView: NSView {
 /// unified toolbar is what gives the title bar Raycast's height and keeps
 /// the traffic lights, title and pill on one centred row.
 final class TitlebarChrome: NSObject, NSToolbarDelegate {
+  /// The incognito badge for a scratch pad's title bar: `scratch.png`
+  /// beside the binary (it ships in assets/), drawn as a template so it
+  /// takes the title's grey. Nil when the asset is missing.
+  static func scratchImage() -> NSImage? {
+    let binaryDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    guard let image = NSImage(contentsOf: binaryDir.appendingPathComponent("scratch.png")) else { return nil }
+    image.isTemplate = true
+    return image
+  }
+
   private let run: (String) -> Void
   var onSettings: ((NSView) -> Void)?
   private let titleLabel = PassThroughLabel(labelWithString: "")
@@ -270,7 +280,7 @@ final class TitlebarChrome: NSObject, NSToolbarDelegate {
     titleLabel.translatesAutoresizingMaskIntoConstraints = false
     titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280).isActive = true
 
-    scratchBadge.image = scratchBadgeImage()
+    scratchBadge.image = Self.scratchImage()
     scratchBadge.contentTintColor = .secondaryLabelColor
     scratchBadge.toolTip = "Scratch note: deleted three hours after its last edit"
     scratchBadge.isHidden = true
