@@ -6,6 +6,15 @@ import Foundation
 final class NoteTextView: NSTextView {
   var onCommand: ((String) -> Bool)?
 
+  /// The panel hands each open note its own undo manager so a note's
+  /// history survives switching away and back, and file-level undo steps
+  /// (a trash, a create) can sit on a note's stack as ordinary steps.
+  /// nil falls back to the view's private manager, which the headless
+  /// harnesses use.
+  var noteUndoManager: UndoManager?
+
+  override var undoManager: UndoManager? { noteUndoManager ?? super.undoManager }
+
   // Code block cards reach into the inset margin, outside the clip the
   // layout manager draws in, so the view paints them with its background.
   override func draw(_ dirtyRect: NSRect) {

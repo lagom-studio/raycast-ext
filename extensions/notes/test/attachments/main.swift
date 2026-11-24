@@ -1366,6 +1366,101 @@ do {
   notesDir = previousDir
 }
 
+// MARK: - Undo across notes and file actions
+
+do {
+  let dir = tempDir()
+  let previousDir = notesDir
+  notesDir = dir
+  let controller = PanelController(initialCommand: "hide")
+  controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+  let textView = Mirror(reflecting: controller).children.first { $0.label == "textView" }!.value as! NoteTextView
+  func currentPath() -> String? {
+    Mirror(reflecting: controller).children.first { $0.label == "currentPath" }!.value as? String
+  }
+  let alpha = (dir as NSString).appendingPathComponent("alpha.md")
+  let beta = (dir as NSString).appendingPathComponent("beta.md")
+  try! "# Alpha\n".write(toFile: alpha, atomically: true, encoding: .utf8)
+  try! "# Beta\n".write(toFile: beta, atomically: true, encoding: .utf8)
+
+  controller.handle("open " + alpha)
+  textView.insertText("typed", replacementRange: textView.selectedRange())
+  check("typing registers on the note's undo stack", textView.undoManager?.canUndo == true)
+  controller.handle("open " + beta)
+  check("another note starts its own clean stack", textView.undoManager?.canUndo == false)
+  controller.handle("open " + alpha)
+  check("returning to a note keeps its undo stack", textView.undoManager?.canUndo == true)
+  textView.undoManager?.undo()
+  check("undo after switching back still reaches the edit", !textView.string.contains("typed"))
+  textView.undoManager?.redo()
+  check("redo restores the edit too", textView.string.contains("typed"))
+
+  controller.handle("new")
+  let created = currentPath()!
+  check("a new note is current", created != alpha)
+  textView.undoManager?.undo()
+  check("undo deletes the note it made and returns to the open one",
+    !FileManager.default.fileExists(atPath: created) && currentPath() == alpha)
+
+  controller.handle("duplicate")
+  let copy = currentPath()!
+  check("a duplicate is current", copy != alpha)
+  textView.undoManager?.undo()
+  check("undo deletes the copy and returns to the original",
+    !FileManager.default.fileExists(atPath: copy) && currentPath() == alpha)
+
+  controller.handle("delete")
+  check("the note went to the Trash", !FileManager.default.fileExists(atPath: alpha))
+  textView.undoManager?.undo()
+  check("undo puts a trashed note back and reopens it",
+    FileManager.default.fileExists(atPath: alpha) && currentPath() == alpha)
+  check("the restored note kept its text", textView.string.contains("typed"))
+  textView.undoManager?.undo()
+  check("undo of the restore trashes it again", !FileManager.default.fileExists(atPath: alpha))
+  textView.undoManager?.undo()
+  check("and undoing that brings it back once more",
+    FileManager.default.fileExists(atPath: alpha) && currentPath() == alpha,
+    "exists=\(FileManager.default.fileExists(atPath: alpha)) current=\(currentPath() ?? "nil")")
+
+  controller.handle("open " + beta)
+  try! "# Alpha\nchanged outside\n".write(toFile: alpha, atomically: true, encoding: .utf8)
+  controller.handle("open " + alpha)
+  check("a file changed while closed drops its stale undo stack",
+    textView.undoManager?.canUndo == false)
+
+  controller.handle("scratch")
+  let pad = currentPath()!
+  check("a scratch pad is current", isScratchNote(pad))
+  textView.undoManager?.undo()
+  check("undo removes the pad for good and returns to the open note",
+    !FileManager.default.fileExists(atPath: pad) && currentPath() == alpha)
+  textView.undoManager?.undo()
+  check("undo of the removal writes the pad back",
+    FileManager.default.fileExists(atPath: pad) && currentPath() == pad)
+
+  controller.handle("hide")
+  notesDir = previousDir
+}
+
+do {
+  // One note in the folder: undoing its creation must leave a valid
+  // empty state, not an editable buffer that can never save.
+  let dir = tempDir()
+  let previousDir = notesDir
+  notesDir = dir
+  let controller = PanelController(initialCommand: "hide")
+  controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+  let textView = Mirror(reflecting: controller).children.first { $0.label == "textView" }!.value as! NoteTextView
+  controller.handle("new")
+  let created = Mirror(reflecting: controller).children.first { $0.label == "currentPath" }!.value as? String
+  check("the only note was created", created != nil)
+  textView.undoManager?.undo()
+  check("undoing the only note leaves an empty read-only editor",
+    created.map { !FileManager.default.fileExists(atPath: $0) } == true && !textView.isEditable)
+  controller.handle("hide")
+  notesDir = previousDir
+}
+
 print("\(count - failures)/\(count) passed")
 if failures == 0 { print("all passed") }
 exit(failures == 0 ? 0 : 1)

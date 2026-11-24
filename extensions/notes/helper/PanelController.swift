@@ -12,6 +12,19 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
   /// note shown since the helper started, so a note opens again as it was
   /// left. Never saved.
   private var collapsedToggles: [String: Set<String>] = [:]
+  /// One undo stack per note path, kept for the helper's life, so a
+  /// note's edit history survives switching away and back. Trashed notes
+  /// keep theirs too: undoing the trash restores the note with its
+  /// history. Renames follow in `renameToMatchTitleIfNeeded`.
+  private var undoManagers: [String: UndoManager] = [:]
+  /// The path the editor buffer currently shows; unlike `currentPath`,
+  /// it stays set after the file is trashed or swept so the next `load`
+  /// can stash the buffer under the right note.
+  private var bufferPath: String?
+  /// Per path, the buffer text its undo stack last described. A note
+  /// whose file changed while it was closed no longer matches, so the
+  /// stack is dropped rather than let undo splice stale text in.
+  private var lastShownText: [String: String] = [:]
   private var loadedText = ""
   private var saveTimer: Timer?
   private var watcher: DispatchSourceFileSystemObject?
@@ -792,17 +805,20 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     }
     refreshList()
     load(copyPath)
+    let id = NoteNames.parse((copyPath as NSString).lastPathComponent)?.id
+    registerFileUndo("Duplicate Note") { me in me.discardCreatedNote(at: copyPath, id: id, action: "Duplicate Note", returningTo: path) }
   }
 
   /// Moves the open note to the Trash (no confirmation: the Trash keeps
-  /// it), then shows the newest remaining note.
+  /// it), then shows the newest remaining note. ⌘Z puts it back.
   private func deleteNote() {
     guard let path = currentPath else { return }
     saveNow()
     watcher?.cancel()
     watcher = nil
+    var trashedURL: NSURL?
     do {
-      try diskFiles.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+      try diskFiles.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &trashedURL)
     } catch {
       NSSound.beep()
       watch(path)
@@ -813,6 +829,35 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     loadedText = ""
     refreshList()
     if let first = notes.first { load(first.path) } else { newNote() }
+    if let trashed = trashedURL as URL? {
+      registerFileUndo("Trash Note") { me in me.restoreNote(from: trashed, to: path) }
+    }
+  }
+
+  /// Undo of a trash: moves the note back to its old path — when the
+  /// name was taken since, what sits there is left alone and just opens —
+  /// and shows it again, its own undo stack intact. Its id stays retired:
+  /// the log is append-only and the worst case is the id is never reused.
+  private func restoreNote(from trashed: URL, to path: String) {
+    saveNow()
+    guard !diskFiles.fileExists(atPath: path) else {
+      refreshList()
+      open(path)
+      show()
+      return
+    }
+    do {
+      try diskFiles.moveItem(at: trashed, to: URL(fileURLWithPath: path))
+    } catch {
+      NSSound.beep()
+      return
+    }
+    refreshList()
+    open(path)
+    show()
+    // ⌘Z on the restored note re-trashes it, which leaves a restore step
+    // on the next note's stack in turn: the action undoes both ways.
+    registerFileUndo("Trash Note") { me in me.deleteNote() }
   }
 
   /// A fresh pad for text transfers and markdown previews: a hidden
@@ -820,6 +865,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
   /// sweep deletes it once it has sat unedited for scratchTTL.
   private func newScratchNote() {
     saveNow()
+    let previous = currentPath
     let path = uniquePath(for: ".scratch-\(freshID(in: notesDir)).md")
     do {
       try diskFiles.createDirectory(atPath: notesDir, withIntermediateDirectories: true)
@@ -830,6 +876,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
       return
     }
     load(path)
+    registerFileUndo("New Scratch Note") { me in me.discardCreatedNote(at: path, id: nil, action: "New Scratch Note", returningTo: previous) }
   }
 
   /// Deletes every pad idle for longer than scratchTTL, except the open
@@ -844,6 +891,7 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
 
   private func newNote() {
     saveNow()
+    let previous = currentPath
     let path = uniquePath(for: NoteNames.filename(stamp: NoteNames.timestamp(), id: freshID(in: notesDir), slug: "untitled"))
     do {
       try diskFiles.createDirectory(atPath: notesDir, withIntermediateDirectories: true)
@@ -856,6 +904,143 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     refreshList()
     load(path)
     textView.setSelectedRange(NSRange(location: 2, length: 0))
+    let id = NoteNames.parse((path as NSString).lastPathComponent)?.id
+    registerFileUndo("New Note") { me in me.discardCreatedNote(at: path, id: id, action: "New Note", returningTo: previous) }
+  }
+
+  /// Undo of a create (new, scratch, duplicate): removes the file the
+  /// action made — permanently for a scratch pad, like the sweep, to the
+  /// Trash otherwise — and returns to the note that was open, where ⌘Z
+  /// brings the note back. A title rename since the create is followed
+  /// by id so the right file goes; a removal that fails keeps the note,
+  /// its undo stack and everything else, with just a beep.
+  private func discardCreatedNote(at createdPath: String, id: String?, action: String, returningTo previous: String?) {
+    saveNow()
+    watcher?.cancel()
+    watcher = nil
+    refreshList()
+    var path = createdPath
+    if !diskFiles.fileExists(atPath: path), let id,
+      let renamed = notes.first(where: {
+        NoteNames.parse(($0.path as NSString).lastPathComponent)?.id == id
+      })
+    {
+      path = renamed.path
+    }
+    if diskFiles.fileExists(atPath: path) {
+      // Keep enough to bring the note back: the Trash url, or for a pad
+      // (removed permanently) its text.
+      let text = isScratchNote(path) ? textView.string : nil
+      var trashedURL: NSURL?
+      do {
+        if isScratchNote(path) {
+          try diskFiles.removeItem(atPath: path)
+        } else {
+          try diskFiles.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &trashedURL)
+        }
+      } catch {
+        NSSound.beep()
+        watch(path)
+        return
+      }
+      NoteNames.retireID(of: (path as NSString).lastPathComponent, in: (path as NSString).deletingLastPathComponent)
+      undoManagers.removeValue(forKey: createdPath)
+      undoManagers.removeValue(forKey: path)
+      currentPath = nil
+      refreshList()
+      landBack(previous: previous)
+      // ⌘Z on the note we land on puts the created file back, and that
+      // registers this discard again: the action undoes both ways.
+      registerFileUndo(action) { me in
+        me.recreateNote(at: path, trashed: trashedURL as URL?, text: text, id: id, action: action)
+      }
+      return
+    }
+    // The file is already gone; just go back.
+    undoManagers.removeValue(forKey: createdPath)
+    undoManagers.removeValue(forKey: path)
+    currentPath = nil
+    refreshList()
+    landBack(previous: previous)
+  }
+
+  /// Undo of a discard: brings the created file back — moved out of the
+  /// Trash, or written again for a permanently removed pad — and opens
+  /// it with the same discard step on its stack. A name taken since is
+  /// left alone and just opens.
+  private func recreateNote(at path: String, trashed: URL?, text: String?, id: String?, action: String) {
+    saveNow()
+    let previous = currentPath
+    guard !diskFiles.fileExists(atPath: path) else {
+      refreshList()
+      open(path)
+      show()
+      return
+    }
+    do {
+      if let trashed {
+        try diskFiles.moveItem(at: trashed, to: URL(fileURLWithPath: path))
+      } else {
+        try (text ?? "").write(toFile: path, atomically: false, encoding: .utf8)
+      }
+    } catch {
+      NSSound.beep()
+      return
+    }
+    refreshList()
+    open(path)
+    show()
+    registerFileUndo(action) { me in me.discardCreatedNote(at: path, id: id, action: action, returningTo: previous) }
+  }
+
+  /// Where an undo stands when the note it stood on is gone: the note
+  /// open before it, the newest remaining one, or an empty editor —
+  /// made read-only, since a text with no path could never save.
+  private func landBack(previous: String?) {
+    if let previous, diskFiles.fileExists(atPath: previous) {
+      open(previous)
+    } else if let first = notes.first {
+      load(first.path)
+    } else {
+      bufferPath = nil
+      loadedText = ""
+      textView.isEditable = false
+      // The removed note's stack may still be attached; clearing the
+      // buffer is nobody's edit.
+      let stale = textView.undoManager
+      stale?.disableUndoRegistration()
+      textView.string = ""
+      if stale?.isUndoRegistrationEnabled == false { stale?.enableUndoRegistration() }
+      updateTitle()
+    }
+  }
+
+  /// Adds one undo step to the open note's stack that reverses a
+  /// file-level action (a trash, a create), so the next ⌘Z replays it.
+  /// The event's open group is closed first so the step always stands
+  /// alone — ⌘Z undoes exactly it even when several steps land in one
+  /// run of the run loop.
+  private func registerFileUndo(_ action: String, _ handler: @escaping (PanelController) -> Void) {
+    guard let manager = textView.undoManager else { return }
+    if manager.groupingLevel == 1 {
+      // Close the event's open group so the step undoes alone even when
+      // several file steps land in one run of the run loop.
+      manager.endUndoGrouping()
+      manager.beginUndoGrouping()
+    }
+    manager.beginUndoGrouping()
+    manager.setActionName(action)
+    manager.registerUndo(withTarget: self, handler: handler)
+    manager.endUndoGrouping()
+  }
+
+  /// The undo stack for `path`, made on first use; the text view's
+  /// `undoManager` returns it while the note is open.
+  private func undoManager(for path: String) -> UndoManager {
+    if let manager = undoManagers[path] { return manager }
+    let manager = UndoManager()
+    undoManagers[path] = manager
+    return manager
   }
 
   /// Today's daily note, `YYYY-MM-DD.md`, created on first use with the
@@ -910,7 +1095,21 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
 
   private func load(_ path: String) {
     rememberCollapsedToggles()
+    if let shown = bufferPath, textView.isEditable {
+      lastShownText[shown] = textView.string
+    }
     currentPath = path
+    bufferPath = path
+    // The note gets its own undo stack; filling the view with its text
+    // is not an edit of ours, so the stack sees nothing of the load.
+    let noteUndo = undoManager(for: path)
+    noteUndo.disableUndoRegistration()
+    // A restyle path can flip registration back on itself; only put the
+    // flag back if it is still off.
+    defer {
+      if !noteUndo.isUndoRegistrationEnabled { noteUndo.enableUndoRegistration() }
+    }
+    textView.noteUndoManager = noteUndo
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
       // Not UTF-8 (or unreadable): show it read-only so nothing here can
       // overwrite or copy a file we cannot represent.
@@ -924,6 +1123,12 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     }
     textView.isEditable = true
     loadedText = text
+    // The stack only describes the buffer we last showed; a file changed
+    // while the note was closed makes its steps splice the wrong text.
+    if let shown = lastShownText[path], shown != text {
+      noteUndo.removeAllActions()
+    }
+    lastShownText[path] = text
     // Setting the string resets the caret; keep relocation off for that,
     // then place the caret with relocation on (so it never rests on a
     // fence) but with fence edits off (so opening a note never changes it).
@@ -935,7 +1140,6 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     textView.suppressFenceEdits = true
     textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
     textView.suppressFenceEdits = false
-    textView.undoManager?.removeAllActions()
     textView.scrollToEndOfDocument(nil)
     codeBlocks.update()
     watch(path)
@@ -986,6 +1190,13 @@ final class PanelController: NSObject, NSApplicationDelegate, NSTextViewDelegate
     let nextPath = uniqueNotePath(for: next, in: directory, renaming: true)
     guard nextPath != path, (try? diskFiles.moveItem(atPath: path, toPath: nextPath)) != nil else { return }
     currentPath = nextPath
+    bufferPath = nextPath
+    if let manager = undoManagers.removeValue(forKey: path) {
+      undoManagers[nextPath] = manager
+    }
+    if let shown = lastShownText.removeValue(forKey: path) {
+      lastShownText[nextPath] = shown
+    }
     if let index = notes.firstIndex(where: { $0.path == path }) {
       notes[index] = Note(path: nextPath, modified: Date())
     }
